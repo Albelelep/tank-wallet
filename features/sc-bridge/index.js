@@ -257,7 +257,15 @@ class ScBridge extends Feature {
           this._sendError(client, 'Welcome requires invite for send; use open or include invite.');
           return;
         }
-        this.sidechannel.broadcast(channel, payload, invitePayload ? { invite: invitePayload } : undefined);
+        const ok = this.sidechannel.broadcast(
+          channel,
+          payload,
+          invitePayload ? { invite: invitePayload } : undefined
+        );
+        if (!ok) {
+          this._sendError(client, 'Send denied (invite required or invalid).');
+          return;
+        }
         this._broadcastToClient(client, { type: 'sent', channel });
         return;
       }
@@ -317,7 +325,11 @@ class ScBridge extends Feature {
           this._sendError(client, 'Invalid welcome (expected JSON or base64).');
           return;
         }
-        this.sidechannel.requestOpen(channel, via, invite, welcome);
+        const ok = this.sidechannel.requestOpen(channel, via, invite, welcome);
+        if (!ok) {
+          this._sendError(client, 'Open request denied (invalid input or missing invite/welcome).');
+          return;
+        }
         this._broadcastToClient(client, { type: 'open_requested', channel, via: via || null });
         return;
       }
