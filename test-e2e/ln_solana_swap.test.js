@@ -442,6 +442,75 @@ test('e2e: LN<->Solana escrow flows', async (t) => {
     assert.equal(st2.feeAmount, 0n, 'escrow drained');
   });
 
+  await t.test('swaprecover claim: operator can claim from receipts with preimage', async () => {
+    const runId = crypto.randomBytes(4).toString('hex');
+    const invoiceLabel = `swaprecover_claim_${runId}`;
+    const invoice4 = await clnCli('cln-alice', ['invoice', '100000msat', invoiceLabel, 'swaprecover claim']);
+    const paymentHash4 = parseHex32(invoice4.payment_hash, 'payment_hash');
+    const bolt114 = invoice4.bolt11;
+
+    const now4 = Math.floor(Date.now() / 1000);
+    const refundAfter4 = now4 + 3600;
+
+    const { tx: escrowTx4 } = await createEscrowTx({
+      connection,
+      payer: solAlice,
+      payerTokenAccount: aliceToken,
+      mint,
+      paymentHashHex: paymentHash4,
+      recipient: solBob.publicKey,
+      refund: solAlice.publicKey,
+      refundAfterUnix: refundAfter4,
+      amount: 1_000_000n,
+    });
+    await sendAndConfirm(connection, escrowTx4);
+
+    const payRes4 = await clnCli('cln-bob', ['pay', bolt114]);
+    const preimage4 = parseHex32(payRes4.payment_preimage, 'payment_preimage');
+
+    // Persist a minimal receipt so the operator can claim deterministically.
+    const receiptsDb = path.join(repoRoot, `onchain/receipts/e2e-swaprecover-claim-${runId}.sqlite`);
+    const store = openTradeReceiptsStore({ dbPath: receiptsDb });
+    const tradeId = `e2e_claim_${runId}`;
+    store.upsertTrade(tradeId, {
+      ln_payment_hash_hex: paymentHash4,
+      ln_preimage_hex: preimage4,
+      sol_mint: mint.toBase58(),
+      sol_program_id: LN_USDT_ESCROW_PROGRAM_ID.toBase58(),
+      state: 'ln_paid',
+    });
+    store.close();
+
+    const keypairPath = path.join(repoRoot, `onchain/solana/keypairs/e2e-swaprecover-claim-${runId}.json`);
+    fs.mkdirSync(path.dirname(keypairPath), { recursive: true });
+    fs.writeFileSync(keypairPath, `${JSON.stringify(Array.from(solBob.secretKey))}\n`, { mode: 0o600 });
+
+    const before = (await getAccount(connection, bobToken, 'confirmed')).amount;
+    const claimRes = await nodeJson([
+      'scripts/swaprecover.mjs',
+      'claim',
+      '--receipts-db',
+      receiptsDb,
+      '--trade-id',
+      tradeId,
+      '--solana-rpc-url',
+      'http://127.0.0.1:8899',
+      '--solana-keypair',
+      keypairPath,
+      '--commitment',
+      'confirmed',
+    ]);
+    assert.equal(claimRes.type, 'claimed');
+    assert.equal(claimRes.payment_hash_hex, paymentHash4);
+
+    const after = (await getAccount(connection, bobToken, 'confirmed')).amount;
+    assert.equal(after - before, 1_000_000n);
+
+    const st4 = await getEscrowState(connection, paymentHash4);
+    assert.ok(st4, 'escrow state exists');
+    assert.equal(st4.status, 1, 'escrow claimed');
+  });
+
   await t.test('negative: wrong preimage cannot claim', async () => {
     const invoice3 = await clnCli('cln-alice', ['invoice', '100000msat', 'swap3', 'swap wrong preimage']);
     const paymentHash3 = parseHex32(invoice3.payment_hash, 'payment_hash');

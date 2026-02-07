@@ -40,6 +40,10 @@ Commands:
   open --channel <name> --via <entryChannel> [--invite ...] [--welcome ...]
   send --channel <name> (--text <msg> | --json <obj|@file>)
 
+Service/presence announcements (signed swap envelopes):
+  svc-announce --channels <a,b,c> --name <label> [--pairs <p1,p2>] [--otc-channels <a,b,c>] [--note <text>] [--offers-json <json|@file>] [--trade-id <id>] [--ttl-sec <sec>] [--join 0|1]
+  svc-announce-loop --channels <a,b,c> --config <json|@file> [--interval-sec <sec>] [--watch 0|1] [--ttl-sec <sec>] [--trade-id <id>] [--join 0|1]
+
 Invite/Welcome helpers (signed by the peer via SC-Bridge sign):
   make-welcome --channel <name> --text <welcomeText>
   make-invite --channel <name> --invitee-pubkey <hex32> [--ttl-sec <sec>] [--welcome <b64|json|@file>]
@@ -110,6 +114,44 @@ function readTextMaybeFile(value) {
     return fs.readFileSync(p, 'utf8');
   }
   return v;
+}
+
+function parseJsonMaybeFile(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  // Inline JSON.
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  // @file convention.
+  if (trimmed.startsWith('@')) {
+    try {
+      const p = trimmed.slice(1);
+      const text = fs.readFileSync(p, 'utf8');
+      return JSON.parse(String(text || '').trim());
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  // Plain file path.
+  try {
+    if (fs.existsSync(trimmed)) {
+      const text = fs.readFileSync(trimmed, 'utf8');
+      return JSON.parse(String(text || '').trim());
+    }
+  } catch (_e) {}
+
+  return null;
 }
 
 function parseJsonOrBase64(value) {
@@ -387,6 +429,177 @@ async function main() {
     if (res.type !== 'sent') throw new Error(`send failed: ${JSON.stringify(res).slice(0, 200)}`);
     return res;
   };
+
+  if (cmd === 'svc-announce') {
+    const channels = splitCsv(flags.get('channels') || flags.get('channel'));
+    if (channels.length === 0) die('svc-announce requires --channels (or --channel)');
+
+    const name = requireFlag(flags, 'name');
+    const pairs = splitCsv(flags.get('pairs'));
+    const otcChannels = splitCsv(flags.get('otc-channels'));
+    const note = flags.get('note') ? String(flags.get('note')) : null;
+    const offers = parseJsonMaybeFile(flags.get('offers-json'));
+    if (flags.get('offers-json') && !offers) die('Invalid --offers-json (expected JSON or @file)');
+
+    const ttlSec = maybeInt(flags.get('ttl-sec'), 'ttl-sec');
+    const validUntilUnix = ttlSec ? Math.floor(Date.now() / 1000) + ttlSec : null;
+
+    const tradeId =
+      (flags.get('trade-id') && String(flags.get('trade-id')).trim()) ||
+      `svc:${name.replaceAll(/\s+/g, '-').slice(0, 64)}`;
+
+    const join = parseBoolFlag(flags.get('join'), true);
+
+    const unsigned = createUnsignedEnvelope({
+      v: 1,
+      kind: KIND.SVC_ANNOUNCE,
+      tradeId,
+      body: {
+        name,
+        ...(pairs.length > 0 ? { pairs } : {}),
+        ...(otcChannels.length > 0 ? { otc_channels: otcChannels } : {}),
+        ...(note ? { note } : {}),
+        ...(offers ? { offers } : {}),
+        ...(validUntilUnix ? { valid_until_unix: validUntilUnix } : {}),
+      },
+    });
+
+    const signed = await withScBridge({ url, token }, async (sc) => {
+      if (join) {
+        for (const ch of channels) await sc.join(ch);
+      }
+      const env = await signSwapEnvelope(sc, unsigned);
+      for (const ch of channels) {
+        const res = await sc.send(ch, env);
+        if (res.type !== 'sent') throw new Error(`send failed: ${JSON.stringify(res).slice(0, 200)}`);
+      }
+      return env;
+    });
+
+    process.stdout.write(`${JSON.stringify(signed, null, 2)}\n`);
+    return;
+  }
+
+  if (cmd === 'svc-announce-loop') {
+    const channels = splitCsv(flags.get('channels') || flags.get('channel'));
+    if (channels.length === 0) die('svc-announce-loop requires --channels (or --channel)');
+
+    const intervalSec = maybeInt(flags.get('interval-sec'), 'interval-sec') ?? 30;
+    if (!Number.isFinite(intervalSec) || intervalSec <= 0) die('Invalid --interval-sec');
+
+    const ttlSec = maybeInt(flags.get('ttl-sec'), 'ttl-sec');
+    const tradeId = flags.get('trade-id') ? String(flags.get('trade-id')).trim() : '';
+
+    const watch = parseBoolFlag(flags.get('watch'), true);
+    const join = parseBoolFlag(flags.get('join'), true);
+
+    const configRaw = flags.get('config');
+    if (!configRaw || configRaw === true) die('svc-announce-loop requires --config');
+    const configPath = typeof configRaw === 'string' ? configRaw.trim() : '';
+    if (!configPath) die('svc-announce-loop requires --config');
+
+    const readConfig = () => {
+      const cfg = parseJsonMaybeFile(configPath);
+      if (!cfg || typeof cfg !== 'object') throw new Error('Invalid config (expected JSON object)');
+      const name = typeof cfg.name === 'string' ? cfg.name.trim() : '';
+      if (!name) throw new Error('Invalid config: missing name');
+      return cfg;
+    };
+
+    const sc = new ScBridgeClient({ url, token });
+    await sc.connect();
+    try {
+      if (join) {
+        for (const ch of channels) {
+          const res = await sc.join(ch);
+          if (res.type !== 'joined') throw new Error(`join failed: ${JSON.stringify(res).slice(0, 200)}`);
+        }
+      }
+
+      let dirty = true;
+      let lastCfg = null;
+      let watcher = null;
+
+      const load = () => {
+        const cfg = readConfig();
+        lastCfg = cfg;
+        dirty = false;
+        return cfg;
+      };
+
+      if (watch) {
+        // Best-effort file watch; if it fails, we still re-read every interval.
+        try {
+          watcher = fs.watch(configPath.startsWith('@') ? configPath.slice(1) : configPath, () => {
+            dirty = true;
+          });
+        } catch (_e) {}
+      }
+
+      const sendOnce = async () => {
+        const cfg = dirty || !lastCfg ? load() : lastCfg;
+        const name = String(cfg.name || '').trim();
+        const pairs = Array.isArray(cfg.pairs) ? cfg.pairs.map((p) => String(p)).filter(Boolean) : [];
+        const otcChannels = Array.isArray(cfg.otc_channels)
+          ? cfg.otc_channels.map((c) => String(c)).filter(Boolean)
+          : [];
+        const note = cfg.note !== undefined && cfg.note !== null ? String(cfg.note) : null;
+        const offers = cfg.offers !== undefined ? cfg.offers : null;
+
+        const validUntilUnix = ttlSec ? Math.floor(Date.now() / 1000) + ttlSec : null;
+        const tid =
+          tradeId ||
+          (typeof cfg.trade_id === 'string' && cfg.trade_id.trim()) ||
+          `svc:${name.replaceAll(/\s+/g, '-').slice(0, 64)}`;
+
+        const unsigned = createUnsignedEnvelope({
+          v: 1,
+          kind: KIND.SVC_ANNOUNCE,
+          tradeId: tid,
+          body: {
+            name,
+            ...(pairs.length > 0 ? { pairs } : {}),
+            ...(otcChannels.length > 0 ? { otc_channels: otcChannels } : {}),
+            ...(note ? { note } : {}),
+            ...(offers ? { offers } : {}),
+            ...(validUntilUnix ? { valid_until_unix: validUntilUnix } : {}),
+          },
+        });
+
+        const signed = await signSwapEnvelope(sc, unsigned);
+        for (const ch of channels) {
+          const res = await sc.send(ch, signed);
+          if (res.type !== 'sent') throw new Error(`send failed: ${JSON.stringify(res).slice(0, 200)}`);
+        }
+        process.stdout.write(
+          `${JSON.stringify({ type: 'svc_announce_sent', channels, trade_id: tid, ts: signed.ts, name })}\n`
+        );
+      };
+
+      // Send immediately, then on interval.
+      await sendOnce();
+
+      const timer = setInterval(() => {
+        sendOnce().catch((err) => {
+          process.stderr.write(`svc-announce-loop error: ${err?.message ?? String(err)}\n`);
+        });
+      }, Math.max(250, intervalSec * 1000));
+
+      await new Promise((resolve) => {
+        const stop = () => resolve();
+        process.on('SIGINT', stop);
+        process.on('SIGTERM', stop);
+      });
+
+      clearInterval(timer);
+      try {
+        watcher?.close?.();
+      } catch (_e) {}
+    } finally {
+      sc.close();
+    }
+    return;
+  }
 
   if (cmd === 'rfq') {
     const channel = requireFlag(flags, 'channel');

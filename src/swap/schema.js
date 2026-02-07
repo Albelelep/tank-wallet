@@ -63,6 +63,35 @@ export function validateSwapBody(kind, body) {
           return { ok: false, error: 'svc_announce.pairs must be an array of strings' };
         }
       }
+      if (body.otc_channels !== undefined) {
+        if (!Array.isArray(body.otc_channels) || body.otc_channels.some((c) => typeof c !== 'string')) {
+          return { ok: false, error: 'svc_announce.otc_channels must be an array of strings' };
+        }
+      }
+      if (body.note !== undefined && body.note !== null) {
+        if (typeof body.note !== 'string') return { ok: false, error: 'svc_announce.note must be a string' };
+      }
+      if (body.offers !== undefined && body.offers !== null) {
+        if (!Array.isArray(body.offers)) return { ok: false, error: 'svc_announce.offers must be an array' };
+        // Keep validation minimal; offers are informational and may evolve.
+        for (const offer of body.offers) {
+          if (!isObject(offer)) return { ok: false, error: 'svc_announce.offers entries must be objects' };
+          if (offer.have !== undefined && offer.have !== null && typeof offer.have !== 'string') {
+            return { ok: false, error: 'svc_announce.offers.have must be a string' };
+          }
+          if (offer.want !== undefined && offer.want !== null && typeof offer.want !== 'string') {
+            return { ok: false, error: 'svc_announce.offers.want must be a string' };
+          }
+          if (offer.pair !== undefined && offer.pair !== null && typeof offer.pair !== 'string') {
+            return { ok: false, error: 'svc_announce.offers.pair must be a string' };
+          }
+        }
+      }
+      if (body.valid_until_unix !== undefined && body.valid_until_unix !== null) {
+        if (!isPosInt(body.valid_until_unix)) {
+          return { ok: false, error: 'svc_announce.valid_until_unix must be a unix seconds integer' };
+        }
+      }
       return { ok: true, error: null };
     }
 

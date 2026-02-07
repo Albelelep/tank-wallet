@@ -194,3 +194,37 @@ test('swap schema: quote_accept + swap_invite validate', async () => {
   const swapInvite = signEnvelope(maker, swapInviteUnsigned);
   assert.equal(validateSwapEnvelope(swapInvite).ok, true);
 });
+
+test('swap schema: svc_announce validates minimal + extended fields', async () => {
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  const ok = createUnsignedEnvelope({
+    v: 1,
+    kind: KIND.SVC_ANNOUNCE,
+    tradeId: 'svc_test_1',
+    body: {
+      name: 'swap-maker',
+      pairs: [PAIR.BTC_LN__USDT_SOL],
+      otc_channels: ['0000intercomswapbtcusdt'],
+      note: 'Have USDT, want BTC',
+      offers: [{ have: ASSET.USDT_SOL, want: ASSET.BTC_LN, pair: PAIR.BTC_LN__USDT_SOL }],
+      valid_until_unix: nowSec + 60,
+    },
+    ts: Date.now(),
+    nonce: 'svc1',
+  });
+  assert.equal(validateSwapEnvelope(ok).ok, true);
+
+  const badOffers = createUnsignedEnvelope({
+    v: 1,
+    kind: KIND.SVC_ANNOUNCE,
+    tradeId: 'svc_test_2',
+    body: {
+      name: 'swap-maker',
+      offers: 'nope',
+    },
+    ts: Date.now(),
+    nonce: 'svc2',
+  });
+  assert.equal(validateSwapEnvelope(badOffers).ok, false);
+});

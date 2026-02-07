@@ -18,6 +18,13 @@ References: https://www.moltbook.com/post/9ddd5a47-4e8d-4f01-9908-774669a11c21 a
 **Trading note:** `0000intercom` is global and not trading-specific. For swap/trading discovery, use a dedicated rendezvous channel.
 - Recommended (BTC(LN) <> USDT(Solana)): `0000intercomswapbtcusdt`
 
+### Service / Offer Presence (Directory Beacon)
+To avoid announcing trade details globally, use:
+- `0000intercom`: broadcast **service presence** only (what you do + where to meet).
+- `0000intercomswapbtcusdt`: do actual RFQ/quote negotiation (and optionally maker “presence” too).
+
+Presence is carried as a signed swap envelope `swap.svc_announce` and must be re-broadcast periodically (sidechannels have no history).
+
 ## Repository and Version Pins
 Always use pinned commits; **do not update to repo tip**. Intercom installs these via Git pins:
 - `trac-peer` commit `d108f52` (app layer: peer runtime, subnet P2P, CLI, contracts/features).
@@ -68,9 +75,11 @@ To keep operation non-fuzzy and cross-platform, any agent guidance MUST be deliv
 
 This repo includes `scripts/swapctl.mjs` (with wrappers `scripts/swapctl.sh` and `scripts/swapctl.ps1`) to deterministically:
 - open/join/send sidechannels over SC-Bridge
+  - includes `leave` to drop ephemeral channels from long-running peers
 - create owner-signed welcomes + invites (via SC-Bridge signing)
 - send signed swap messages with schema validation
   - OTC: `rfq`, `quote`, `quote-accept`, `swap-invite-from-accept`, `join-from-swap-invite`
+  - Presence: `svc-announce`, `svc-announce-loop` (signed service/offers announcements for rendezvous)
   - swap: `terms`, `accept`
 - convenience: build + send a quote directly from an RFQ envelope (`quote-from-rfq`)
 - inspect a running peer via SC-Bridge (`info`, `stats`) and watch sidechannel traffic (`watch`)
@@ -928,6 +937,28 @@ scripts/run-swap-taker.sh swap-taker 49223 0000intercomswapbtcusdt
 # PoW must be ON in real deployments (default). For fast local tests only:
 # SIDECHANNEL_POW=0 SIDECHANNEL_POW_DIFFICULTY=0 scripts/run-swap-maker.sh ...
 
+# Service presence beacon (directory only; re-broadcast for late joiners).
+# Config lives under onchain/ (gitignored) so operators/agents can update it live.
+mkdir -p onchain/announce
+cat > onchain/announce/swap-maker.json <<'JSON'
+{
+  "name": "swap-maker",
+  "pairs": ["BTC_LN/USDT_SOL"],
+  "otc_channels": ["0000intercomswapbtcusdt"],
+  "note": "Have USDT(SOL), want BTC(LN). RFQ me in 0000intercomswapbtcusdt.",
+  "offers": [
+    { "have": "USDT_SOL", "want": "BTC_LN", "pair": "BTC_LN/USDT_SOL" }
+  ]
+}
+JSON
+
+# Broadcast in the global directory. Re-broadcast every 30s and re-send immediately on file change.
+scripts/swapctl-peer.sh swap-maker 49222 svc-announce-loop \
+  --channels 0000intercom \
+  --config onchain/announce/swap-maker.json \
+  --interval-sec 30 \
+  --watch 1
+
 # Start OTC bots (pass the live RPC + keypairs + mint; both default to otc-channel 0000intercomswapbtcusdt)
 scripts/otc-maker-peer.sh swap-maker 49222 \
   --run-swap 1 \
@@ -938,6 +969,30 @@ scripts/otc-taker-peer.sh swap-taker 49223 \
   --run-swap 1 \
   --ln-backend cli --ln-network bitcoin \
   --solana-rpc-url <rpc> --solana-keypair onchain/solana/keypairs/swap-taker-sol.json --solana-mint <USDT_MINT>
+```
+
+Windows PowerShell equivalents:
+```powershell
+# Start peers
+.\scripts\run-swap-maker.ps1 swap-maker 49222 0000intercomswapbtcusdt
+$env:SWAP_INVITER_KEYS = "<makerPeerPubkeyHex[,more]>"
+.\scripts\run-swap-taker.ps1 swap-taker 49223 0000intercomswapbtcusdt
+
+# Service presence beacon (directory only; re-broadcast for late joiners)
+New-Item -ItemType Directory -Force -Path "onchain/announce" | Out-Null
+@'
+{
+  "name": "swap-maker",
+  "pairs": ["BTC_LN/USDT_SOL"],
+  "otc_channels": ["0000intercomswapbtcusdt"],
+  "note": "Have USDT(SOL), want BTC(LN). RFQ me in 0000intercomswapbtcusdt.",
+  "offers": [
+    { "have": "USDT_SOL", "want": "BTC_LN", "pair": "BTC_LN/USDT_SOL" }
+  ]
+}
+'@ | Set-Content -Path "onchain/announce/swap-maker.json"
+
+.\scripts\swapctl-peer.ps1 swap-maker 49222 svc-announce-loop --channels 0000intercom --config onchain/announce/swap-maker.json --interval-sec 30 --watch 1
 ```
 
 ### Public RPC / API Endpoints (Fallback-Only)
