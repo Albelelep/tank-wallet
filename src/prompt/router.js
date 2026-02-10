@@ -5,6 +5,7 @@ import { INTERCOMSWAP_TOOLS } from './tools.js';
 import { OpenAICompatibleClient } from './openaiClient.js';
 import { AuditLog } from './audit.js';
 import { SecretStore, isSecretHandle } from './secrets.js';
+import { repairToolArguments } from './repair.js';
 import { stableStringify } from '../util/stableStringify.js';
 
 function nowMs() {
@@ -36,57 +37,6 @@ function isObject(v) {
   return v && typeof v === 'object' && !Array.isArray(v);
 }
 
-function repairToolArguments(toolName, args) {
-  // Best-effort repair for common model mistakes. Keep this tightly scoped and conservative.
-  if (!isObject(args)) return args;
-
-  // Models often flatten offer fields (have/want/btc_sats/...) at the top-level for offer_post.
-  // The schema requires these to live under offers[].
-  if (toolName === 'intercomswap_offer_post') {
-    const out = { ...args };
-    // Some models use "channel" (singular) instead of "channels" (array).
-    if (!Array.isArray(out.channels) && typeof out.channel === 'string' && out.channel.trim()) {
-      out.channels = [out.channel.trim()];
-      delete out.channel;
-    }
-
-    const offerKeys = [
-      'pair',
-      'have',
-      'want',
-      'btc_sats',
-      'usdt_amount',
-      'max_platform_fee_bps',
-      'max_trade_fee_bps',
-      'max_total_fee_bps',
-      'min_sol_refund_window_sec',
-      'max_sol_refund_window_sec',
-    ];
-    const flattened = offerKeys.filter((k) => k in out);
-    if (flattened.length > 0) {
-      // Always delete flattened top-level keys; executor rejects them.
-      if (!Array.isArray(out.offers) || out.offers.length === 0 || !isObject(out.offers[0])) {
-        const o = {};
-        for (const k of flattened) o[k] = out[k];
-        out.offers = [o];
-      } else {
-        // Merge into offers[0] only if the key is missing there (avoid silent overrides).
-        const merged = { ...(out.offers[0] || {}) };
-        for (const k of flattened) {
-          if (!(k in merged)) merged[k] = out[k];
-        }
-        out.offers = [merged].concat(out.offers.slice(1));
-      }
-      for (const k of flattened) delete out[k];
-    } else if (!Array.isArray(out.offers)) {
-      // If offers is missing entirely, but there were no flattened keys, leave as-is and let schema validation fail.
-    }
-    return out;
-  }
-
-  return args;
-}
-
 function safeJsonParse(text) {
   const raw = String(text ?? '').trim();
   if (!raw) return { ok: false, value: null, error: 'empty' };
@@ -101,19 +51,13 @@ function isValidStructuredFinal(value) {
   if (!isObject(value)) return { ok: false, error: 'final must be a JSON object' };
   const type = value.type;
   if (typeof type !== 'string' || !type.trim()) return { ok: false, error: 'final.type must be a non-empty string' };
-  // Prevent accidentally treating a (possibly malformed) tool call as the final output.
-  // Tool calls must be executed via tool_calls parsing or the text-extraction fallback.
   const t = type.trim();
-  if (t === 'tool' || t === 'tool_call' || t === 'function' || t === 'function_call') {
-    return { ok: false, error: 'final.type must not be a tool-call type' };
-  }
-  // We only require `.text` for a user-facing message.
-  // For operational flows, models often emit a structured status/result object
-  // (eg, {type:"info", ...} or {type:"swap_complete", ...}). Accept those.
-  if (t === 'message') {
-    const text = value.text;
-    if (typeof text !== 'string') return { ok: false, error: 'final.text must be a string when final.type=="message"' };
-  }
+  // We only accept {"type":"message","text":"..."} as the final output.
+  // Any other structured JSON object is treated as INVALID_OUTPUT so the model re-emits
+  // either a tool call or a message (prevents "plan JSON" like {type:"auto_post_schedule"}).
+  if (t !== 'message') return { ok: false, error: 'final.type must be "message" (use tool calls to act)' };
+  const text = value.text;
+  if (typeof text !== 'string') return { ok: false, error: 'final.text must be a string when final.type=="message"' };
   return { ok: true, error: null };
 }
 
@@ -658,8 +602,7 @@ export class PromptRouter {
           content:
             'INVALID_OUTPUT. Output ONLY one of:\n' +
             '1) Tool call JSON: {"type":"tool","name":"<tool_name>","arguments":{...}}\n' +
-            '2) Final JSON: {"type":"message","text":"..."} (preferred)\n' +
-            'Or a structured final JSON object with at least: {"type":"<non-empty>"} where type is NOT "tool".\n' +
+            '2) Final JSON: {"type":"message","text":"..."}\n' +
             'Do NOT output plans or any other keys. Re-emit now.',
         });
         continue;

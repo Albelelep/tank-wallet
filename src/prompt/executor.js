@@ -28,6 +28,7 @@ import { hashUnsignedEnvelope, sha256Hex } from '../swap/hash.js';
 import { hashTermsEnvelope } from '../swap/terms.js';
 import { verifySwapPrePayOnchain } from '../swap/verify.js';
 import { AutopostManager } from './autopost.js';
+import { repairToolArguments } from './repair.js';
 import {
   createSignedWelcome,
   createSignedInvite,
@@ -755,8 +756,10 @@ export class ToolExecutor {
       const intervalSec = expectInt(args, toolName, 'interval_sec', { min: 5, max: 24 * 3600 });
       const ttlSec = expectInt(args, toolName, 'ttl_sec', { min: 10, max: 7 * 24 * 3600 });
       const validUntil = expectOptionalInt(args, toolName, 'valid_until_unix', { min: 1 });
-      const subArgs = args.args;
-      if (!isObject(subArgs)) throw new Error(`${toolName}: args must be an object`);
+      const subArgsRaw = args.args;
+      if (!isObject(subArgsRaw)) throw new Error(`${toolName}: args must be an object`);
+      // Repair nested args for the scheduled sub-tool (common LLM mistake: flattening offer fields).
+      const subArgs = repairToolArguments(tool, subArgsRaw);
       if (dryRun)
         return {
           type: 'dry_run',
