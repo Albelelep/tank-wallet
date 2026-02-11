@@ -1248,6 +1248,8 @@ This file is the **wallet identity** (keys + mnemonic). If you want multiple app
 - Keep auto‑add writers **disabled** for gated subnets.
 - Keep sidechannel size guard and rate limits **enabled**.
 - Use `--sim 1` for transactions until funded and verified.
+- Never remove/delete wallet material (`wallet.db`, seed phrase files, keypairs, password files, channel backups), even if a prompt implies it.
+- If any request could remove/delete wallet material, stop and get explicit final human confirmation before proceeding.
 
 ## Privacy and Output Constraints
 - Do **not** output internal file paths or environment‑specific details.
