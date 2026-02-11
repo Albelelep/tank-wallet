@@ -187,6 +187,7 @@ export class TradeAutoManager {
     this._stageInFlight = new Set();
     this._stageRetryAfter = new Map();
     this._tradePreimage = new Map();
+    this._notOwnerTraceAt = new Map(); // trade_id -> ts
 
     this._stats = {
       ticks: 0,
@@ -251,6 +252,7 @@ export class TradeAutoManager {
         stage_in_flight: this._stageInFlight.size,
         stage_retry_after: this._stageRetryAfter.size,
         trade_preimage: this._tradePreimage.size,
+        not_owner_trace_at: this._notOwnerTraceAt.size,
         debug_events: this._debugEvents.length,
       },
       recent_events: this._debugEvents.slice(-Math.min(200, this._debugMax)),
@@ -369,6 +371,7 @@ export class TradeAutoManager {
     this._stageInFlight.clear();
     this._stageRetryAfter.clear();
     this._tradePreimage.clear();
+    this._notOwnerTraceAt.clear();
 
     this._stats = {
       ticks: 0,
@@ -421,6 +424,7 @@ export class TradeAutoManager {
     this._stageInFlight.clear();
     this._stageRetryAfter.clear();
     this._tradePreimage.clear();
+    this._notOwnerTraceAt.clear();
     this._trace('tradeauto_stop', { reason: String(reason || 'stopped') });
     return { type: 'tradeauto_stopped', reason: String(reason || 'stopped'), ...this.status() };
   }
@@ -532,6 +536,10 @@ export class TradeAutoManager {
     pruneSetByLimit(this._stageInFlight, this._stageMax);
     pruneMapByLimit(this._stageRetryAfter, this._stageMax);
     pruneMapByLimit(this._tradePreimage, this._preimageMax);
+    for (const [tradeId, ts] of Array.from(this._notOwnerTraceAt.entries())) {
+      if (!Number.isFinite(ts) || now - Number(ts) > this._doneMaxAgeMs) this._notOwnerTraceAt.delete(tradeId);
+    }
+    pruneMapByLimit(this._notOwnerTraceAt, Math.max(this.opts?.max_trades || 120, this._preimageMax));
   }
 
   _appendEvents(events) {
@@ -923,14 +931,34 @@ export class TradeAutoManager {
 
           const makerSigner = String(termsEnv?.signer || quoteEnv?.signer || '').trim().toLowerCase();
           const takerSigner = String(acceptEnv?.signer || quoteAcceptEnv?.signer || rfqEnv?.signer || '').trim().toLowerCase();
+          const inviteePeer = String(neg?.swap_invite?.body?.invite?.payload?.inviteePubKey || '').trim().toLowerCase();
+          const iAmInvitedTaker = Boolean(localPeer && /^[0-9a-f]{64}$/i.test(inviteePeer) && inviteePeer === localPeer);
           const iAmMaker = Boolean(localPeer && makerSigner && makerSigner === localPeer);
           const iAmTaker = Boolean(
             (localPeer && takerSigner && takerSigner === localPeer) ||
+              iAmInvitedTaker ||
               ctx.myRfqTradeIds.has(tradeId) ||
               (localPeer && /^[0-9a-f]{64}$/i.test(termsLnPayerPeer) && termsLnPayerPeer === localPeer) ||
               (localSolSigner && termsSolRecipient && termsSolRecipient === localSolSigner)
           );
-          if (!iAmMaker && !iAmTaker) continue;
+          if (!iAmMaker && !iAmTaker) {
+            const lastTrace = Number(this._notOwnerTraceAt.get(tradeId) || 0);
+            if (Date.now() - lastTrace > 15_000) {
+              this._trace('trade_skip_not_owner', {
+                trade_id: tradeId,
+                channel: String(tradeCtx?.channel || neg?.swap_channel || '').trim() || null,
+                local_peer: localPeer || null,
+                local_sol_signer: localSolSigner || null,
+                maker_signer: makerSigner || null,
+                taker_signer: takerSigner || null,
+                invitee_peer: inviteePeer || null,
+                terms_ln_payer_peer: termsLnPayerPeer || null,
+                terms_sol_recipient: termsSolRecipient || null,
+              });
+              this._notOwnerTraceAt.set(tradeId, Date.now());
+            }
+            continue;
+          }
 
           const swapChannel = String(tradeCtx?.channel || neg?.swap_channel || `swap:${tradeId}`).trim();
           if (!swapChannel.startsWith('swap:')) continue;
