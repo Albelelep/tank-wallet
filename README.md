@@ -784,6 +784,7 @@ Complete prompt-tool index (source of truth: `src/prompt/tools.js`, runtime beha
 | `intercomswap_ln_closechannel` | Close a Lightning channel (cooperative by default) to return liquidity to on-chain BTC. |
 | `intercomswap_ln_withdraw` | Send on-chain BTC from the LN node wallet to a BTC address. |
 | `intercomswap_ln_connect` | Connect to a Lightning peer (nodeid@host:port). |
+| `intercomswap_ln_peer_probe` | Probe a Lightning peer (TCP reachability + LN connect state). Optionally attempts reconnect. |
 | `intercomswap_ln_fundchannel` | Open a public Lightning channel to a peer. |
 | `intercomswap_ln_splice` | Splice a Lightning channel in/out (CLN experimental splicing only). Use positive sats to add liquidity and negative sats to remove liquidity. |
 | `intercomswap_ln_invoice_create` | Create a standard BOLT11 invoice (no hodl invoices). |
