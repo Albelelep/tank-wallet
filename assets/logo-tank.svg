@@ -1,0 +1,21 @@
+<svg width="640" height="640" viewBox="0 0 640 640" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TankWallet logo">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b8de58"/>
+      <stop offset="100%" stop-color="#6f9530"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#12212a"/>
+      <stop offset="100%" stop-color="#263640"/>
+    </linearGradient>
+  </defs>
+  <rect x="20" y="20" width="600" height="600" rx="140" fill="url(#g2)"/>
+  <circle cx="320" cy="340" r="182" fill="#101922"/>
+  <rect x="146" y="300" width="348" height="110" rx="32" fill="url(#g1)"/>
+  <rect x="246" y="234" width="178" height="92" rx="20" fill="#d8f08d"/>
+  <rect x="388" y="258" width="170" height="24" rx="12" fill="#d8f08d"/>
+  <circle cx="214" cy="355" r="36" fill="#12212a"/>
+  <circle cx="320" cy="355" r="36" fill="#12212a"/>
+  <circle cx="426" cy="355" r="36" fill="#12212a"/>
+  <path d="M142 444c36 34 84 54 178 54 95 0 142-20 178-54" fill="none" stroke="#d7e9a4" stroke-width="24" stroke-linecap="round"/>
+</svg>
