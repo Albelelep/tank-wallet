@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "TankWallet",
+  "description": "TankWallet extension for TNK/TRK send, receive, QR, and swap through local bridge.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "TankWallet",
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:49333/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
